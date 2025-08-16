@@ -1,8 +1,7 @@
-
 const asyncHandler = require("express-async-handler");
 const User = require("../models/UserModel");
 const generateToken = require("../utils/generateToken");
-const UserPreference = require('../models/UserPreferenceModel');
+
 
 // @desc Register a new User
 // @access Public
@@ -35,8 +34,7 @@ const registerUser = asyncHandler(async (req, res) => {
   });
 
   if (user) {
-
-      await UserPreference.createDefaultPreferences(user._id);
+    // await UserPreference.createDefaultPreferences(user._id);
 
     res.status(201).json({
       _id: user.id,

@@ -461,7 +461,7 @@ const userSchema = new mongoose.Schema({
 });
 
 // Indexes
-userSchema.index({ email: 1 }, { unique: true });
+// userSchema.index({ email: 1 }, { unique: true });
 userSchema.index({ "profile.company": 1 });
 userSchema.index({ "subscription.plan": 1 });
 userSchema.index({ "admin.status": 1 });
