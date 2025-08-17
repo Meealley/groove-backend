@@ -29,7 +29,7 @@ const getBaseTemplate = (content, title = "Notification") => {
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>${title}</title>
         <style>
-            body { font-family: Arial, sans-serif; line-height: 1.6; margin: 0; padding: 0; background-color: #f4f4f4; }
+            body { font-family: Manrope, Arial, sans-serif; line-height: 1.6; margin: 0; padding: 0; background-color: #f4f4f4; }
             .container { max-width: 600px; margin: 0 auto; background-color: #ffffff; }
             .header { background-color: #007bff; color: #ffffff; padding: 20px; text-align: center; }
             .content { padding: 30px; }
@@ -117,7 +117,7 @@ const sendEmailVerification = async (user, token) => {
     }
     
     // For mobile apps, point directly to API endpoint
-    const verificationUrl = `${process.env.API_URL || 'http://localhost:5000'}/api/auth/verify-email?token=${token}`;
+    const verificationUrl = `${process.env.API_URL || 'http://localhost:3020'}/api/users/verify-email?token=${token}`;
     
     const content = `
       <h2>Verify Your Email Address</h2>

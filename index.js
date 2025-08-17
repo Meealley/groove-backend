@@ -8,7 +8,11 @@ const connectDB = require('./config/db');
 const { notFound, errorHandler } = require('./middleware/errorMiddleware');
 const userRoutes = require('./routes/userRoutes');
 const taskRoutes = require('./routes/taskRoutes');
-const userPreferencesRoutes = require('./routes/preferencesRoute');
+const preferencesRoutes = require('./routes/preferencesRoutes');
+const profileRoutes = require('./routes/profileRoutes');
+const subscriptionRoutes = require("./routes/subscriptionRoutes")
+const analyticsRoutes = require("./routes/analyticsRoutes");
+const adminRoutes = require('./routes/adminRoutes')
 
 
 const app = express();
@@ -26,7 +30,11 @@ app.use(morgan('dev'));
 // Routes
 app.use('/api/users', userRoutes);
 app.use('/api/tasks', taskRoutes);
-app.use('/api/preferences', userPreferencesRoutes);
+app.use('/api/preferences', preferencesRoutes);
+app.use('/api/profile', profileRoutes);
+app.use('/api/subscription', subscriptionRoutes);
+app.use('/api/analytics', analyticsRoutes);
+app.use('/api/admin', adminRoutes);
 
 // Root route
 app.get('/api/', (_req, res) => {

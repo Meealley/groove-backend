@@ -4,15 +4,18 @@ const User = require("../models/UserModel");
 // @desc    Get user profile
 // @route   GET /api/profile
 // @access  Private
-const getUserProfile = asyncHandler(async (req, res) => {
-  const user = await User.findById(req.user.id).select(
-    "-password -security.twoFactorAuth.secret -security.passwordReset"
-  );
+const getProfile = asyncHandler(async (req, res) => {
+  const user = await User.findById(req.user._id).select('-password -security.twoFactorAuth.secret -security.passwordReset');
+  
   if (!user) {
     res.status(404);
     throw new Error("User not found");
   }
-  res.status(200).json(user.profile);
+
+  res.status(200).json({
+    success: true,
+    data: user.profile
+  });
 });
 
 // @desc    Update user profile
@@ -114,7 +117,7 @@ const getCurrentTime = asyncHandler(async (req, res) => {
 });
 
 module.exports = {
-  getUserProfile,
+  getProfile,
   updateUserProfile,
   uploadAvatar,
   deleteAvatar,

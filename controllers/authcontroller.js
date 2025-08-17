@@ -289,7 +289,7 @@ const getMe = asyncHandler(async (req, res) => {
 
   // Calculate some real-time metrics
   const accountAge = Math.floor((new Date() - user.createdAt) / (1000 * 60 * 60 * 24));
-  const engagementScore = require("../utils/userUtils").calculateEngagementScore(user);
+  const engagementScore = require("../utils/userUtil").calculateEngagementScore(user);
 
   res.status(200).json({
     success: true,
@@ -394,23 +394,58 @@ const refreshToken = asyncHandler(async (req, res) => {
 // @route   POST /api/auth/logout
 // @access  Private
 const logoutUser = asyncHandler(async (req, res) => {
-  const { sessionId } = req.body;
+  // Handle case where req.body might be undefined
+  const { sessionId } = req.body || {};
   
-  if (sessionId) {
-    const user = await User.findById(req.user._id);
-    
-    // Find and deactivate the session
-    const session = user.security.sessions.find(s => s.sessionId === sessionId);
-    if (session) {
-      session.isActive = false;
-      await user.save();
+  try {
+    if (sessionId) {
+      const user = await User.findById(req.user._id);
+      
+      if (user) {
+        // Find and deactivate the specific session
+        const session = user.security.sessions.find(s => s.sessionId === sessionId && s.isActive);
+        if (session) {
+          session.isActive = false;
+          await user.save();
+          
+          res.json({
+            success: true,
+            message: "Session logged out successfully",
+            data: {
+              sessionId,
+              loggedOut: true
+            }
+          });
+          return;
+        }
+      }
     }
+    
+    // If no sessionId provided or session not found, still return success
+    // This handles cases where the client doesn't send sessionId
+    res.json({
+      success: true,
+      message: "Logged out successfully",
+      data: {
+        loggedOut: true,
+        note: sessionId ? "Session not found but logout confirmed" : "Logout without specific session"
+      }
+    });
+    
+  } catch (error) {
+    console.error('Logout error:', error);
+    
+    // Even if there's an error, we should still return success for logout
+    // since the token will be discarded on the client side anyway
+    res.json({
+      success: true,
+      message: "Logged out successfully",
+      data: {
+        loggedOut: true,
+        note: "Logout completed with minor issues"
+      }
+    });
   }
-
-  res.json({
-    success: true,
-    message: "Logged out successfully"
-  });
 });
 
 // @desc    Verify email address
@@ -560,6 +595,45 @@ const resendEmailVerification = asyncHandler(async (req, res) => {
   }
 });
 
+// @desc    Verify email address (JSON response for mobile)
+// @route   POST /api/auth/verify-email
+// @access  Public
+const verifyEmailAPI = asyncHandler(async (req, res) => {
+  const { token } = req.body;
+  
+  if (!token) {
+    res.status(400);
+    throw new Error("Verification token is required");
+  }
+
+  // Find user with this verification token
+  const user = await User.findOne({
+    'security.verification.email.token': token,
+    'security.verification.email.verified': false
+  });
+
+  if (!user) {
+    res.status(400);
+    throw new Error("Invalid or expired verification token");
+  }
+
+  // Verify the email
+  user.security.verification.email.verified = true;
+  user.security.verification.email.verifiedAt = new Date();
+  user.security.verification.email.token = null; // Clear the token
+  
+  await user.save();
+
+  res.json({
+    success: true,
+    message: "Email verified successfully! You can now access all features.",
+    data: {
+      emailVerified: true,
+      verifiedAt: user.security.verification.email.verifiedAt
+    }
+  });
+});
+
 module.exports = {
   registerUser,
   loginUser,
@@ -567,5 +641,6 @@ module.exports = {
   refreshToken,
   logoutUser,
   verifyEmail,
+  verifyEmailAPI,
   resendEmailVerification,
 };
