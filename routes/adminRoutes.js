@@ -11,10 +11,10 @@ const {
   bulkUpdateUsers,
   exportUserData
 } = require("../controllers/admincontroller");
-// const {
-//   getQueueStatus,
-//   processEmailQueueManually
-// } = require("../controllers/emailMonitoringController");
+const {
+  getQueueStatus,
+  processEmailQueueManually
+} = require("../controllers/emailMonitoringcontroller");
 const { protect, admin, superAdmin } = require("../middleware/authMiddleware");
 
 // Apply authentication and admin middleware to all routes
@@ -62,12 +62,12 @@ router.get("/stats", getSystemStats);
 // @route   GET /api/admin/email-queue
 // @desc    Get email queue status
 // @access  Private/Admin
-// router.get("/email-queue", getQueueStatus);
+router.get("/email-queue", getQueueStatus);
 
 // @route   POST /api/admin/email-queue/process
 // @desc    Process email queue manually
 // @access  Private/Admin
-// router.post("/email-queue/process", processEmailQueueManually);
+router.post("/email-queue/process", processEmailQueueManually);
 
 // Bulk Operations
 // @route   PUT /api/admin/users/bulk-update

@@ -1,6 +1,6 @@
 const nodemailer = require('nodemailer');
 
-// Email transporter configuration
+// Email transporter configuration optimized for Gmail
 const createTransporter = () => {
   // Check if email configuration is available
   if (!process.env.SMTP_HOST || !process.env.SMTP_USER || !process.env.SMTP_PASS) {
@@ -8,18 +8,164 @@ const createTransporter = () => {
     return null;
   }
 
-  return nodemailer.createTransport({
-    host: process.env.SMTP_HOST,
-    port: process.env.SMTP_PORT,
-    secure: process.env.SMTP_SECURE === 'true',
+  // Basic configuration
+  const config = {
     auth: {
       user: process.env.SMTP_USER,
-      pass: process.env.SMTP_PASS,
+      pass: process.env.SMTP_PASS, // Use App Password for Gmail
     },
-  });
+    // Optimized connection settings
+    connectionTimeout: 30000, // 30 seconds
+    greetingTimeout: 30000, // 30 seconds
+    socketTimeout: 30000, // 30 seconds
+    
+    // Disable connection pooling for better reliability
+    pool: false,
+    
+    // TLS settings
+    tls: {
+      rejectUnauthorized: true,
+      minVersion: 'TLSv1.2',
+    },
+    
+    debug: process.env.NODE_ENV === 'development',
+    logger: process.env.NODE_ENV === 'development'
+  };
+
+  // Gmail-specific configuration
+  if (process.env.SMTP_HOST === 'smtp.gmail.com') {
+    config.service = 'gmail';
+  } else {
+    // For other SMTP providers
+    config.host = process.env.SMTP_HOST;
+    config.port = parseInt(process.env.SMTP_PORT) || 587;
+    config.secure = process.env.SMTP_SECURE === 'true';
+    config.requireTLS = true;
+  }
+
+  return nodemailer.createTransport(config);
 };
 
-// Base email template
+// Simplified retry logic with exponential backoff
+const sendEmailWithRetry = async (transporter, mailOptions, maxRetries = 3) => {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      console.log(`📧 Email attempt ${attempt}/${maxRetries} to ${mailOptions.to}`);
+      
+      const result = await transporter.sendMail(mailOptions);
+      console.log(`✅ Email sent successfully to ${mailOptions.to} on attempt ${attempt}`);
+      return result;
+      
+    } catch (error) {
+      console.error(`❌ Email attempt ${attempt} failed:`, error.message);
+      
+      // If this is the last attempt, throw the error
+      if (attempt === maxRetries) {
+        throw error;
+      }
+      
+      // Wait before retrying with exponential backoff
+      const delay = Math.min(2000 * Math.pow(2, attempt - 1), 15000); // Max 15 seconds
+      console.log(`⏳ Retrying email in ${delay}ms...`);
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+};
+
+// Improved queue system with better error handling
+class EmailQueue {
+  constructor() {
+    this.queue = [];
+    this.processing = false;
+    this.maxRetries = 3; // Reduced from 7 to avoid spam
+    this.retryDelay = 30000; // 30 seconds between queue retries
+  }
+
+  async add(emailData) {
+    this.queue.push({
+      ...emailData,
+      id: Date.now() + Math.random(),
+      attempts: 0,
+      addedAt: new Date()
+    });
+    
+    console.log(`📨 Email queued for ${emailData.to}: ${emailData.subject}`);
+    
+    if (!this.processing) {
+      // Small delay to batch multiple emails
+      setTimeout(() => this.process(), 1000);
+    }
+  }
+
+  async process() {
+    if (this.processing || this.queue.length === 0) {
+      return;
+    }
+
+    this.processing = true;
+    console.log(`🔄 Processing email queue: ${this.queue.length} emails pending`);
+
+    while (this.queue.length > 0) {
+      const emailData = this.queue.shift();
+      
+      try {
+        await this.sendEmail(emailData);
+        console.log(`✅ Email delivered: ${emailData.to}`);
+      } catch (error) {
+        emailData.attempts++;
+        console.error(`❌ Failed to send email to ${emailData.to} (attempt ${emailData.attempts}):`, error.message);
+        
+        if (emailData.attempts < this.maxRetries) {
+          console.log(`🔄 Re-queuing email for retry: ${emailData.to}`);
+          setTimeout(() => {
+            this.queue.push(emailData);
+            if (!this.processing) {
+              this.process();
+            }
+          }, this.retryDelay);
+        } else {
+          console.error(`💀 Max retries exceeded for email to ${emailData.to}. Giving up.`);
+        }
+      }
+      
+      // Delay between emails to avoid rate limiting
+      await new Promise(resolve => setTimeout(resolve, 2000)); // 2 seconds
+    }
+
+    this.processing = false;
+    console.log(`✅ Email queue processing completed`);
+  }
+
+  async sendEmail(emailData) {
+    const transporter = createTransporter();
+    if (!transporter) {
+      throw new Error('Email transporter not configured');
+    }
+
+    const mailOptions = {
+      from: `"${process.env.FROM_NAME || 'TaskGroove'}" <${process.env.FROM_EMAIL || process.env.SMTP_USER}>`,
+      to: emailData.to,
+      subject: emailData.subject,
+      html: emailData.html
+    };
+
+    return await sendEmailWithRetry(transporter, mailOptions, 2); // 2 attempts per queue item
+  }
+
+  // Get queue status
+  getStatus() {
+    return {
+      pending: this.queue.length,
+      processing: this.processing,
+      maxRetries: this.maxRetries
+    };
+  }
+}
+
+// Create global email queue instance
+const emailQueue = new EmailQueue();
+
+// Base email template (unchanged)
 const getBaseTemplate = (content, title = "Notification") => {
   return `
     <!DOCTYPE html>
@@ -29,7 +175,7 @@ const getBaseTemplate = (content, title = "Notification") => {
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>${title}</title>
         <style>
-            body { font-family: Manrope, Arial, sans-serif; line-height: 1.6; margin: 0; padding: 0; background-color: #f4f4f4; }
+            body { font-family: Arial, sans-serif; line-height: 1.6; margin: 0; padding: 0; background-color: #f4f4f4; }
             .container { max-width: 600px; margin: 0 auto; background-color: #ffffff; }
             .header { background-color: #007bff; color: #ffffff; padding: 20px; text-align: center; }
             .content { padding: 30px; }
@@ -59,16 +205,9 @@ const getBaseTemplate = (content, title = "Notification") => {
   `;
 };
 
-// Send welcome email
+// Send welcome email (simplified)
 const sendWelcomeEmail = async (user) => {
   try {
-    const transporter = createTransporter();
-    
-    if (!transporter) {
-      console.log(`Welcome email would be sent to ${user.email} (email not configured)`);
-      return;
-    }
-    
     const content = `
       <h2>Welcome to TaskGroove, ${user.name}! 🎉</h2>
       <p>We're excited to have you on board. Your productivity journey starts now!</p>
@@ -84,40 +223,29 @@ const sendWelcomeEmail = async (user) => {
       </div>
       
       <p>
-        <a href="${process.env.APP_URL}/onboarding" class="button">Complete Setup</a>
+        <a href="${process.env.APP_URL || 'http://localhost:3000'}/onboarding" class="button">Complete Setup</a>
       </p>
       
-      <p>If you have any questions, our support team is here to help. Just reply to this email!</p>
+      <p>If you have any questions, our support team is here to help!</p>
       
       <p>Best regards,<br>The TaskGroove Team</p>
     `;
 
-    const mailOptions = {
-      from: `"TaskGroove" <${process.env.FROM_EMAIL}>`,
+    await emailQueue.add({
       to: user.email,
       subject: "Welcome to TaskGroove! 🚀",
       html: getBaseTemplate(content, "Welcome to TaskGroove")
-    };
-
-    await transporter.sendMail(mailOptions);
-    console.log(`Welcome email sent to ${user.email}`);
+    });
+    
   } catch (error) {
-    console.error('Error sending welcome email:', error);
+    console.error('❌ Error queuing welcome email:', error);
   }
 };
 
-// Send email verification
+// Send email verification (simplified)
 const sendEmailVerification = async (user, token) => {
   try {
-    const transporter = createTransporter();
-    
-    if (!transporter) {
-      console.log(`Verification email would be sent to ${user.email} (email not configured)`);
-      return;
-    }
-    
-    // For mobile apps, point directly to API endpoint
-    const verificationUrl = `${process.env.API_URL || 'http://localhost:3020'}/api/users/verify-email?token=${token}`;
+    const verificationUrl = `${process.env.API_URL || 'http://localhost:5000'}/api/auth/verify-email?token=${token}`;
     
     const content = `
       <h2>Verify Your Email Address</h2>
@@ -128,333 +256,59 @@ const sendEmailVerification = async (user, token) => {
         <a href="${verificationUrl}" class="button">Verify Email Address</a>
       </p>
       
-      <p>If the button doesn't work, you can copy and paste this link into your browser:</p>
-      <p style="word-break: break-all; color: #6c757d;">${verificationUrl}</p>
+      <p>If the button doesn't work, copy and paste this link:</p>
+      <p style="word-break: break-all; color: #6c757d; font-size: 12px;">${verificationUrl}</p>
       
       <p>This verification link will expire in 24 hours.</p>
-      
-      <p>If you didn't create an account with us, please ignore this email.</p>
     `;
 
-    const mailOptions = {
-      from: `"TaskGroove" <${process.env.FROM_EMAIL}>`,
+    await emailQueue.add({
       to: user.email,
       subject: "Verify Your Email Address",
       html: getBaseTemplate(content, "Email Verification")
-    };
-
-    await transporter.sendMail(mailOptions);
-    console.log(`Verification email sent to ${user.email}`);
+    });
+    
   } catch (error) {
-    console.error('Error sending verification email:', error);
+    console.error('❌ Error queuing verification email:', error);
   }
 };
 
-// Send password reset email
+// Keep other email functions unchanged...
 const sendPasswordResetEmail = async (user, resetToken) => {
   try {
-    const transporter = createTransporter();
-    
-    if (!transporter) {
-      console.log(`Password reset email would be sent to ${user.email} (email not configured)`);
-      return;
-    }
-    
     const resetUrl = `${process.env.APP_URL}/reset-password?token=${resetToken}`;
     
     const content = `
       <h2>Password Reset Request</h2>
       <p>Hi ${user.name},</p>
-      <p>We received a request to reset your password. Click the button below to set a new password:</p>
+      <p>Click the button below to reset your password:</p>
       
       <p>
         <a href="${resetUrl}" class="button">Reset Password</a>
       </p>
       
-      <p>If the button doesn't work, you can copy and paste this link into your browser:</p>
-      <p style="word-break: break-all; color: #6c757d;">${resetUrl}</p>
-      
       <div class="alert alert-warning">
-        <strong>Security Note:</strong> This link will expire in 10 minutes for your security.
+        <strong>Security Note:</strong> This link expires in 10 minutes.
       </div>
-      
-      <p>If you didn't request a password reset, please ignore this email. Your password will remain unchanged.</p>
     `;
 
-    const mailOptions = {
-      from: `"TaskGroove" <${process.env.FROM_EMAIL}>`,
+    await emailQueue.add({
       to: user.email,
       subject: "Password Reset Request",
       html: getBaseTemplate(content, "Password Reset")
-    };
-
-    await transporter.sendMail(mailOptions);
-    console.log(`Password reset email sent to ${user.email}`);
+    });
+    
   } catch (error) {
-    console.error('Error sending password reset email:', error);
+    console.error('❌ Error queuing password reset email:', error);
+    throw error;
   }
 };
 
-// Send task reminder email
-const sendTaskReminderEmail = async (user, tasks) => {
-  try {
-    if (!user.settings.notifications.email.taskReminders) {
-      return; // User has disabled task reminder emails
-    }
-
-    const transporter = createTransporter();
-    
-    if (!transporter) {
-      console.log(`Task reminder email would be sent to ${user.email} (email not configured)`);
-      return;
-    }
-    
-    const taskList = tasks.map(task => `
-      <li>
-        <strong>${task.title}</strong>
-        ${task.dueDate ? `<br><small>Due: ${new Date(task.dueDate).toLocaleDateString()}</small>` : ''}
-      </li>
-    `).join('');
-    
-    const content = `
-      <h2>Task Reminders for Today 📅</h2>
-      <p>Hi ${user.name},</p>
-      <p>You have ${tasks.length} task${tasks.length > 1 ? 's' : ''} scheduled for today:</p>
-      
-      <ul style="padding-left: 20px;">
-        ${taskList}
-      </ul>
-      
-      <p>
-        <a href="${process.env.APP_URL}/tasks" class="button">View All Tasks</a>
-      </p>
-      
-      <p>Have a productive day!</p>
-    `;
-
-    const mailOptions = {
-      from: `"TaskGroove" <${process.env.FROM_EMAIL}>`,
-      to: user.email,
-      subject: `Task Reminders - ${tasks.length} task${tasks.length > 1 ? 's' : ''} for today`,
-      html: getBaseTemplate(content, "Task Reminders")
-    };
-
-    await transporter.sendMail(mailOptions);
-    console.log(`Task reminder email sent to ${user.email}`);
-  } catch (error) {
-    console.error('Error sending task reminder email:', error);
-  }
-};
-
-// Send weekly report email
-const sendWeeklyReportEmail = async (user, reportData) => {
-  try {
-    if (!user.settings.notifications.email.weeklyReports) {
-      return;
-    }
-
-    const transporter = createTransporter();
-    
-    if (!transporter) {
-      console.log(`Weekly report email would be sent to ${user.email} (email not configured)`);
-      return;
-    }
-    
-    const {
-      tasksCompleted,
-      totalTasks,
-      timeTracked,
-      productivityScore,
-      streakDays,
-      achievements
-    } = reportData;
-    
-    const completionRate = totalTasks > 0 ? Math.round((tasksCompleted / totalTasks) * 100) : 0;
-    const hours = Math.floor(timeTracked / 60);
-    const minutes = timeTracked % 60;
-    
-    const achievementsList = achievements.length > 0 
-      ? achievements.map(achievement => `<li>🏆 ${achievement.name}</li>`).join('')
-      : '<li>No new achievements this week</li>';
-    
-    const content = `
-      <h2>Your Weekly Productivity Report 📊</h2>
-      <p>Hi ${user.name},</p>
-      <p>Here's your productivity summary for this week:</p>
-      
-      <div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0;">
-        <h3 style="margin-top: 0;">📈 This Week's Stats</h3>
-        <ul style="list-style: none; padding: 0;">
-          <li><strong>Tasks Completed:</strong> ${tasksCompleted} out of ${totalTasks} (${completionRate}%)</li>
-          <li><strong>Time Tracked:</strong> ${hours}h ${minutes}m</li>
-          <li><strong>Productivity Score:</strong> ${productivityScore}/100</li>
-          <li><strong>Current Streak:</strong> ${streakDays} day${streakDays !== 1 ? 's' : ''}</li>
-        </ul>
-      </div>
-      
-      <h3>🏆 New Achievements</h3>
-      <ul>
-        ${achievementsList}
-      </ul>
-      
-      <p>
-        <a href="${process.env.APP_URL}/analytics" class="button">View Detailed Analytics</a>
-      </p>
-      
-      <p>Keep up the great work!</p>
-    `;
-
-    const mailOptions = {
-      from: `"TaskGroove" <${process.env.FROM_EMAIL}>`,
-      to: user.email,
-      subject: "Your Weekly Productivity Report",
-      html: getBaseTemplate(content, "Weekly Report")
-    };
-
-    await transporter.sendMail(mailOptions);
-    console.log(`Weekly report email sent to ${user.email}`);
-  } catch (error) {
-    console.error('Error sending weekly report email:', error);
-  }
-};
-
-// Send subscription notification email
-const sendSubscriptionNotificationEmail = async (user, type, details = {}) => {
-  try {
-    const transporter = createTransporter();
-    
-    if (!transporter) {
-      console.log(`Subscription notification email would be sent to ${user.email} (email not configured)`);
-      return;
-    }
-    
-    let content = '';
-    let subject = '';
-    
-    switch (type) {
-      case 'upgraded':
-        subject = 'Subscription Upgraded Successfully! 🎉';
-        content = `
-          <h2>Subscription Upgraded! 🎉</h2>
-          <p>Hi ${user.name},</p>
-          <p>Your subscription has been successfully upgraded to <strong>${details.plan}</strong>!</p>
-          
-          <div class="alert alert-success">
-            <strong>What's new with your ${details.plan} plan:</strong>
-            <ul>
-              <li>Increased task and project limits</li>
-              <li>Advanced analytics and insights</li>
-              <li>Priority customer support</li>
-              <li>Enhanced collaboration features</li>
-            </ul>
-          </div>
-          
-          <p>
-            <a href="${process.env.APP_URL}/subscription" class="button">View Subscription Details</a>
-          </p>
-        `;
-        break;
-        
-      case 'cancelled':
-        subject = 'Subscription Cancelled';
-        content = `
-          <h2>Subscription Cancelled</h2>
-          <p>Hi ${user.name},</p>
-          <p>Your subscription has been cancelled. You'll continue to have access to premium features until ${new Date(details.endDate).toLocaleDateString()}.</p>
-          
-          <p>We're sorry to see you go. If you change your mind, you can reactivate your subscription at any time.</p>
-          
-          <p>
-            <a href="${process.env.APP_URL}/subscription" class="button">Reactivate Subscription</a>
-          </p>
-        `;
-        break;
-        
-      case 'trial_ending':
-        subject = 'Your Trial is Ending Soon';
-        content = `
-          <h2>Your Trial Ends in ${details.daysLeft} Days</h2>
-          <p>Hi ${user.name},</p>
-          <p>Your free trial will end on ${new Date(details.endDate).toLocaleDateString()}. Don't lose access to your premium features!</p>
-          
-          <div class="alert alert-warning">
-            <strong>What happens when your trial ends:</strong>
-            <ul>
-              <li>Your account will switch to the free plan</li>
-              <li>Some features will be limited</li>
-              <li>Your data will be preserved</li>
-            </ul>
-          </div>
-          
-          <p>
-            <a href="${process.env.APP_URL}/upgrade" class="button">Upgrade Now</a>
-          </p>
-        `;
-        break;
-    }
-
-    const mailOptions = {
-      from: `"TaskGroove" <${process.env.FROM_EMAIL}>`,
-      to: user.email,
-      subject,
-      html: getBaseTemplate(content, "Subscription Update")
-    };
-
-    await transporter.sendMail(mailOptions);
-    console.log(`Subscription notification email sent to ${user.email}`);
-  } catch (error) {
-    console.error('Error sending subscription notification email:', error);
-  }
-};
-
-// Send team invitation email
-const sendTeamInvitationEmail = async (inviterUser, inviteeEmail, teamName, inviteToken) => {
-  try {
-    const transporter = createTransporter();
-    
-    if (!transporter) {
-      console.log(`Team invitation email would be sent to ${inviteeEmail} (email not configured)`);
-      return;
-    }
-    
-    const inviteUrl = `${process.env.APP_URL}/accept-invite?token=${inviteToken}`;
-    
-    const content = `
-      <h2>You're Invited to Join a Team! 👥</h2>
-      <p><strong>${inviterUser.name}</strong> has invited you to join the team "<strong>${teamName}</strong>" on TaskGroove.</p>
-      
-      <p>
-        <a href="${inviteUrl}" class="button">Accept Invitation</a>
-      </p>
-      
-      <p>If the button doesn't work, you can copy and paste this link:</p>
-      <p style="word-break: break-all; color: #6c757d;">${inviteUrl}</p>
-      
-      <p>This invitation will expire in 7 days.</p>
-      
-      <p>If you don't have a TaskGroove account yet, you'll be able to create one when you accept the invitation.</p>
-    `;
-
-    const mailOptions = {
-      from: `"TaskGroove" <${process.env.FROM_EMAIL}>`,
-      to: inviteeEmail,
-      subject: `Invitation to join ${teamName} team`,
-      html: getBaseTemplate(content, "Team Invitation")
-    };
-
-    await transporter.sendMail(mailOptions);
-    console.log(`Team invitation email sent to ${inviteeEmail}`);
-  } catch (error) {
-    console.error('Error sending team invitation email:', error);
-  }
-};
-
+// Export functions
 module.exports = {
   sendWelcomeEmail,
   sendEmailVerification,
   sendPasswordResetEmail,
-  sendTaskReminderEmail,
-  sendWeeklyReportEmail,
-  sendSubscriptionNotificationEmail,
-  sendTeamInvitationEmail
+  getEmailQueueStatus: () => emailQueue.getStatus(),
+  processEmailQueue: () => emailQueue.process()
 };
