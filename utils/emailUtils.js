@@ -223,7 +223,7 @@ const sendWelcomeEmail = async (user) => {
       </div>
       
       <p>
-        <a href="${process.env.APP_URL || 'http://localhost:3000'}/onboarding" class="button">Complete Setup</a>
+        <a href="${process.env.APP_URL || 'http://localhost:3020'}/onboarding" class="button">Complete Setup</a>
       </p>
       
       <p>If you have any questions, our support team is here to help!</p>
@@ -245,7 +245,7 @@ const sendWelcomeEmail = async (user) => {
 // Send email verification (simplified)
 const sendEmailVerification = async (user, token) => {
   try {
-    const verificationUrl = `${process.env.API_URL || 'http://localhost:5000'}/api/auth/verify-email?token=${token}`;
+    const verificationUrl = `${process.env.API_URL || 'http://localhost:3020'}/api/users/verify-email?token=${token}`;
     
     const content = `
       <h2>Verify Your Email Address</h2>

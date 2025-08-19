@@ -539,36 +539,159 @@ userSchema.methods.resetMonthlyUsage = async function () {
 };
 
 // Get user's productivity score
+// userSchema.methods.getProductivityScore = async function (days = 7) {
+//   const Analytics = mongoose.model('Analytics');
+  
+//   const endDate = new Date();
+//   const startDate = new Date();
+//   startDate.setDate(startDate.getDate() - days);
+  
+//   const analytics = await Analytics.findOne({
+//     user: this._id,
+//     'period.startDate': { $gte: startDate },
+//     'period.endDate': { $lte: endDate },
+//   });
+  
+//   if (!analytics) return 50; // Default score
+  
+//   // Calculate weighted productivity score
+//   const completionWeight = 0.4;
+//   const timeManagementWeight = 0.3;
+//   const goalAchievementWeight = 0.3;
+  
+//   const completionScore = analytics.taskMetrics.completionRate || 0;
+//   const timeManagementScore = 100 - (analytics.estimationAccuracy.overall.avgError || 50);
+//   const goalScore = analytics.goalMetrics.personal.achievement_rate || 0;
+  
+//   return Math.round(
+//     completionScore * completionWeight +
+//     timeManagementScore * timeManagementWeight +
+//     goalScore * goalAchievementWeight
+//   );
+// };
+
 userSchema.methods.getProductivityScore = async function (days = 7) {
-  const Analytics = mongoose.model('Analytics');
-  
-  const endDate = new Date();
-  const startDate = new Date();
-  startDate.setDate(startDate.getDate() - days);
-  
-  const analytics = await Analytics.findOne({
-    user: this._id,
-    'period.startDate': { $gte: startDate },
-    'period.endDate': { $lte: endDate },
-  });
-  
-  if (!analytics) return 50; // Default score
-  
-  // Calculate weighted productivity score
-  const completionWeight = 0.4;
-  const timeManagementWeight = 0.3;
-  const goalAchievementWeight = 0.3;
-  
-  const completionScore = analytics.taskMetrics.completionRate || 0;
-  const timeManagementScore = 100 - (analytics.estimationAccuracy.overall.avgError || 50);
-  const goalScore = analytics.goalMetrics.personal.achievement_rate || 0;
-  
-  return Math.round(
-    completionScore * completionWeight +
-    timeManagementScore * timeManagementWeight +
-    goalScore * goalAchievementWeight
-  );
+  try {
+    // Try to get Analytics model safely
+    let Analytics;
+    try {
+      Analytics = mongoose.model('Analytics');
+    } catch (error) {
+      console.log('Analytics model not registered, calculating manually');
+      return await this.calculateProductivityScoreManually(days);
+    }
+
+    const endDate = new Date();
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - days);
+    
+    // Try to find analytics record
+    const analytics = await Analytics.findOne({
+      user: this._id,
+      'period.startDate': { $lte: endDate },
+      'period.endDate': { $gte: startDate },
+    }).sort({ 'period.endDate': -1 });
+    
+    if (analytics && analytics.taskMetrics) {
+      // Calculate weighted productivity score from analytics
+      const completionWeight = 0.4;
+      const timeManagementWeight = 0.3;
+      const goalAchievementWeight = 0.3;
+      
+      const completionScore = analytics.taskMetrics.completionRate || 0;
+      const timeManagementScore = 100 - (analytics.estimationAccuracy?.overall?.avgError || 50);
+      const goalScore = analytics.goalMetrics?.personal?.achievement_rate || 0;
+      
+      return Math.round(
+        completionScore * completionWeight +
+        timeManagementScore * timeManagementWeight +
+        goalScore * goalAchievementWeight
+      );
+    }
+    
+    // Fallback to manual calculation
+    return await this.calculateProductivityScoreManually(days);
+    
+  } catch (error) {
+    console.error('Error calculating productivity score:', error);
+    return await this.calculateProductivityScoreManually(days);
+  }
 };
+
+// Add this new helper method to your UserModel.js:
+userSchema.methods.calculateProductivityScoreManually = async function(days = 7) {
+  try {
+    // Get Task model safely
+    let Task;
+    try {
+      Task = mongoose.model('Task');
+    } catch (error) {
+      console.log('Task model not available');
+      return 50; // Default score
+    }
+    
+    const endDate = new Date();
+    const startDate = new Date();
+    startDate.setDate(endDate.getDate() - days);
+
+    // Get tasks from the specified period
+    const tasks = await Task.find({
+      user: this._id,
+      $or: [
+        { createdAt: { $gte: startDate, $lte: endDate } },
+        { completedAt: { $gte: startDate, $lte: endDate } }
+      ]
+    });
+
+    if (tasks.length === 0) {
+      // If no recent tasks, check user's overall completion rate
+      const allTasks = await Task.find({ user: this._id }).limit(20);
+      if (allTasks.length === 0) return 50;
+      
+      const completed = allTasks.filter(task => task.completed);
+      return Math.round((completed.length / allTasks.length) * 100);
+    }
+
+    const completedTasks = tasks.filter(task => task.completed);
+    const completionRate = (completedTasks.length / tasks.length) * 100;
+
+    // Calculate time efficiency for completed tasks
+    const timeEfficiency = completedTasks.reduce((acc, task) => {
+      if (task.estimatedDuration && task.actualDuration) {
+        const efficiency = Math.min(task.estimatedDuration / task.actualDuration, 1);
+        return acc + efficiency;
+      }
+      return acc + 0.8; // Default efficiency if no time data
+    }, 0) / Math.max(completedTasks.length, 1);
+
+    // Calculate priority adherence
+    const priorityScore = completedTasks.reduce((acc, task) => {
+      const priorityWeights = { urgent: 1, high: 0.8, medium: 0.6, low: 0.4 };
+      return acc + (priorityWeights[task.priority] || 0.5);
+    }, 0) / Math.max(completedTasks.length, 1);
+
+    // Calculate overdue penalty
+    const overdueTasks = tasks.filter(task => 
+      task.dueDate && task.dueDate < new Date() && !task.completed
+    );
+    const overduePenalty = tasks.length > 0 ? (overdueTasks.length / tasks.length) * 20 : 0;
+
+    // Combine metrics into final score (0-100)
+    const productivityScore = Math.round(
+      (completionRate * 0.5) + 
+      (timeEfficiency * 100 * 0.25) + 
+      (priorityScore * 100 * 0.25) - 
+      overduePenalty
+    );
+
+    return Math.min(Math.max(productivityScore, 0), 100);
+    
+  } catch (error) {
+    console.error('Error in manual productivity calculation:', error);
+    return 50; // Safe fallback
+  }
+};
+
 
 // Add achievement
 userSchema.methods.addAchievement = async function (achievementData) {

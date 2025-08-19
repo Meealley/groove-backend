@@ -852,6 +852,98 @@ analyticsSchema.statics.getInsightsSummary = async function(userId, days = 30) {
   };
 };
 
+// Static method to get or create analytics for productivity score
+analyticsSchema.statics.getProductivityScore = async function(userId, days = 7) {
+  try {
+    const endDate = new Date();
+    const startDate = new Date();
+    startDate.setDate(endDate.getDate() - days);
+    
+    // Find most recent analytics
+    const analytics = await this.findOne({
+      user: userId,
+      'period.startDate': { $lte: endDate },
+      'period.endDate': { $gte: startDate },
+    }).sort({ 'period.endDate': -1 });
+    
+    if (analytics && analytics.taskMetrics) {
+      const completionScore = analytics.taskMetrics.completionRate || 0;
+      const timeManagementScore = 100 - (analytics.estimationAccuracy?.overall?.avgError || 50);
+      const goalScore = analytics.goalMetrics?.personal?.achievement_rate || 0;
+      
+      return Math.round(
+        completionScore * 0.4 +
+        timeManagementScore * 0.3 +
+        goalScore * 0.3
+      );
+    }
+    
+    // Generate analytics if none exist
+    const weeklyAnalytics = await this.generateWeeklyAnalytics(userId);
+    return weeklyAnalytics ? weeklyAnalytics.getCalculatedProductivityScore() : 50;
+    
+  } catch (error) {
+    console.error('Error getting analytics productivity score:', error);
+    return 50;
+  }
+};
+
+// Add method to generate weekly analytics quickly
+analyticsSchema.statics.generateWeeklyAnalytics = async function(userId) {
+  try {
+    const Task = mongoose.model('Task');
+    
+    const endDate = new Date();
+    const startDate = new Date();
+    startDate.setDate(endDate.getDate() - 7);
+    
+    const tasks = await Task.find({
+      user: userId,
+      $or: [
+        { createdAt: { $gte: startDate, $lte: endDate } },
+        { completedAt: { $gte: startDate, $lte: endDate } }
+      ]
+    });
+    
+    if (tasks.length === 0) return null;
+    
+    // Create basic analytics
+    const analytics = new this({
+      user: userId,
+      period: {
+        type: 'weekly',
+        startDate: startDate,
+        endDate: endDate,
+      }
+    });
+    
+    // Calculate basic task metrics
+    await analytics.calculateTaskMetrics(tasks);
+    
+    return analytics;
+    
+  } catch (error) {
+    console.error('Error generating weekly analytics:', error);
+    return null;
+  }
+};
+
+// Add method to calculate productivity score from analytics
+analyticsSchema.methods.getCalculatedProductivityScore = function() {
+  if (!this.taskMetrics) return 50;
+  
+  const completionScore = this.taskMetrics.completionRate || 0;
+  const timeManagementScore = 100 - (this.estimationAccuracy?.overall?.avgError || 50);
+  const goalScore = this.goalMetrics?.personal?.achievement_rate || 0;
+  
+  return Math.round(
+    completionScore * 0.4 +
+    timeManagementScore * 0.3 +
+    goalScore * 0.3
+  );
+};
+
+
 const Analytics = mongoose.model("Analytics", analyticsSchema);
 
 module.exports = Analytics;
